@@ -76,7 +76,10 @@ type HetznerAutoScaleConfig struct {
 	ServerType            string   `bson:"serverType"             json:"serverType"`
 	Location              string   `bson:"location"               json:"location"`
 	MaxServers            int      `bson:"maxServers"             json:"maxServers"`
-	DownloadsPerServer    int      `bson:"downloadsPerServer"     json:"downloadsPerServer"`
+	DownloadsPerServer    int      `bson:"downloadsPerServer"     json:"downloadsPerServer"` // legacy fallback
+	// Weighted scaling: slow = missav HLS (heavy), fast = upload/direct/others (light)
+	SlowPerServer         int      `bson:"slowPerServer"          json:"slowPerServer"`          // missav jobs per server (default 2)
+	FastPerServer         int      `bson:"fastPerServer"          json:"fastPerServer"`          // upload/direct jobs per server (default 5)
 	IdleMinutes           int      `bson:"idleMinutes"            json:"idleMinutes"`
 	DeletionWindowMinutes int      `bson:"deletionWindowMinutes" json:"deletionWindowMinutes"` // minutes before billing hour to delete (default 5)
 	MongoURI              string   `bson:"mongoUri"               json:"mongoUri"`
@@ -105,6 +108,12 @@ func (c *HetznerAutoScaleConfig) applyDefaults() {
 	}
 	if c.DownloadsPerServer <= 0 {
 		c.DownloadsPerServer = 2
+	}
+	if c.SlowPerServer <= 0 {
+		c.SlowPerServer = 2 // missav: 2 jobs / server
+	}
+	if c.FastPerServer <= 0 {
+		c.FastPerServer = 5 // upload/direct/others: 5 jobs / server
 	}
 	if c.IdleMinutes <= 0 {
 		c.IdleMinutes = 10

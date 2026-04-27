@@ -84,13 +84,9 @@ func SyncHetznerScaler() error {
 		return nil // setting missing, disabled, or missing required fields
 	}
 
-	// ── 2. Count files waiting to be downloaded (via aggregate) ──────
-	// Conditions:
-	//   - status=waiting, not a clone
-	//   - not trashed / not deleted
-	//   - no medias (not yet processed)
-	//   - no video_process (not currently being processed)
-	//   - has ingest record OR metadata.source (has something to download)
+	// ── 2. Count pending files grouped by sourceType ─────────────
+	// slow = missav (HLS heavy) → SlowPerServer jobs/server
+	// fast = upload/direct/others → FastPerServer jobs/server
 	countPipeline := mongo.Pipeline{
 		{{Key: "$match", Value: bson.D{
 			{Key: "status", Value: models.FileStatusWaiting},
@@ -120,13 +116,15 @@ func SyncHetznerScaler() error {
 			{Key: "_medias", Value: bson.D{{Key: "$size", Value: 0}}},
 			{Key: "_vp", Value: bson.D{{Key: "$size", Value: 0}}},
 			{Key: "$or", Value: bson.A{
-				// has at least one ingest record
 				bson.D{{Key: "_ingests.0", Value: bson.D{{Key: "$exists", Value: true}}}},
-				// OR has metadata.source set
 				bson.D{{Key: "metadata.source", Value: bson.D{{Key: "$exists", Value: true}}}},
 			}},
 		}}},
-		{{Key: "$count", Value: "total"}},
+		// Group by sourceType
+		{{Key: "$group", Value: bson.D{
+			{Key: "_id", Value: "$metadata.sourceType"},
+			{Key: "count", Value: bson.D{{Key: "$sum", Value: 1}}},
+		}}},
 	}
 
 	countCur, err := database.Files().Aggregate(ctx, countPipeline)
@@ -134,16 +132,33 @@ func SyncHetznerScaler() error {
 		return fmt.Errorf("count pending aggregate: %w", err)
 	}
 	var countResult []struct {
-		Total int64 `bson:"total"`
+		SourceType string `bson:"_id"`
+		Count      int64  `bson:"count"`
 	}
 	if err := countCur.All(ctx, &countResult); err != nil {
 		return fmt.Errorf("count pending decode: %w", err)
 	}
 	countCur.Close(ctx)
 
-	var pending int64
-	if len(countResult) > 0 {
-		pending = countResult[0].Total
+	// แยก slow (missav) กับ fast (upload/direct/others)
+	var slowPending, fastPending int64
+	for _, r := range countResult {
+		if r.SourceType == "missav" {
+			slowPending += r.Count
+		} else {
+			fastPending += r.Count
+		}
+	}
+	pending := slowPending + fastPending
+
+	// คำนวณ server ที่ต้องการ แบบ weighted
+	slowNeeded := 0
+	if slowPending > 0 {
+		slowNeeded = int(math.Ceil(float64(slowPending) / float64(cfg.SlowPerServer)))
+	}
+	fastNeeded := 0
+	if fastPending > 0 {
+		fastNeeded = int(math.Ceil(float64(fastPending) / float64(cfg.FastPerServer)))
 	}
 
 	// ── 3. List current managed servers ──────────────────────────────
@@ -152,7 +167,8 @@ func SyncHetznerScaler() error {
 		return fmt.Errorf("list servers: %w", err)
 	}
 
-	log.Printf("🖥️  Hetzner scaler: pending=%d current_servers=%d", pending, len(current))
+	log.Printf("🖥️  Hetzner scaler: pending=%d (slow/missav=%d, fast/others=%d) current_servers=%d",
+		pending, slowPending, fastPending, len(current))
 
 	// ── 4. Scale decision ─────────────────────────────────────────────
 	if pending > 0 {
@@ -161,9 +177,12 @@ func SyncHetznerScaler() error {
 		idleTracker.since = nil
 		idleTracker.Unlock()
 
-		needed := int(math.Ceil(float64(pending) / float64(cfg.DownloadsPerServer)))
+		needed := slowNeeded + fastNeeded
 		if needed > cfg.MaxServers {
 			needed = cfg.MaxServers
+		}
+		if needed < 1 {
+			needed = 1
 		}
 
 		diff := needed - len(current)
@@ -197,13 +216,24 @@ func SyncHetznerScaler() error {
 
 		case diff < 0:
 			toDelete := -diff
-			log.Printf("🖥️  Scale DOWN: need to delete %d server(s) (needed=%d current=%d)", toDelete, needed, len(current))
+			log.Printf("🖥️  Scale DOWN: need to shed %d server(s) (needed=%d current=%d) — checking billing boundary...", toDelete, needed, len(current))
 			deleted := 0
 			for i := 0; i < len(current) && deleted < toDelete; i++ {
 				s := current[i]
 
-				// Check if server has active video_process jobs
-				// WorkerID format: "{serverName}@{N}"
+				// ── เช็ค billing boundary ──────────────────────────────────
+				// Hetzner คิดเงินเป็นชั่วโมง → ลบเฉพาะเมื่อใกล้สิ้นชั่วโมง
+				minutesIntoHour := int(time.Since(s.Created).Minutes()) % 60
+				minutesUntilBoundary := 60 - minutesIntoHour
+				inWindow := minutesIntoHour >= (60 - cfg.DeletionWindowMinutes)
+
+				if !inWindow {
+					log.Printf("  ⏳ Skip %s — %dm into billing hour, delete window opens in ~%dm",
+						s.Name, minutesIntoHour, minutesUntilBoundary)
+					continue
+				}
+
+				// ── เช็ค active jobs ───────────────────────────────────────
 				activeJobs, err := database.VideoProcess().CountDocuments(ctx, bson.M{
 					"workerId": bson.M{"$regex": "^" + s.Name + "@"},
 					"status":   bson.M{"$in": bson.A{models.ProcessStatusPending, models.ProcessStatusProcessing}},
@@ -221,7 +251,7 @@ func SyncHetznerScaler() error {
 					log.Printf("  ⚠️ delete server %s (%d) failed: %v", s.Name, s.ID, err)
 					continue
 				}
-				log.Printf("  ✅ Deleted: %s (%d)", s.Name, s.ID)
+				log.Printf("  ✅ Deleted: %s (%d) — at billing boundary (%dm into hour)", s.Name, s.ID, minutesIntoHour)
 				deleted++
 			}
 
