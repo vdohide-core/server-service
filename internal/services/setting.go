@@ -92,7 +92,7 @@ type HetznerAutoScaleConfig struct {
 
 // IsValid returns true if the config has the minimum required fields.
 func (c *HetznerAutoScaleConfig) IsValid() bool {
-	return c.Enabled && c.APIToken != "" && c.MongoURI != ""
+	return c.Enabled && c.APIToken != ""
 }
 
 // applyDefaults fills in zero-value fields with sensible defaults.
