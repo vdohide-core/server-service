@@ -73,7 +73,7 @@ type CustomDomain struct {
 	Name             string        `bson:"name" json:"name" goose:"required,unique"`
 	Status           string        `bson:"status" json:"status" goose:"default:pending"` // pending, active, failed, expired
 	CreatorID        *string       `bson:"creatorId,omitempty" json:"creatorId,omitempty" goose:"ref:user,index"`
-	SpaceID          *string       `bson:"spaceId,omitempty" json:"spaceId,omitempty" goose:"ref:files,index"`
+	SpaceID          *string       `bson:"spaceId,omitempty" json:"spaceId,omitempty" goose:"ref:workspaces,index"`
 	DNS              *DomainDNS    `bson:"dns,omitempty" json:"dns,omitempty"`
 	Player           *PlayerConfig `bson:"player,omitempty" json:"player,omitempty"`
 	Advert           []Advert      `bson:"advert,omitempty" json:"advert,omitempty"`

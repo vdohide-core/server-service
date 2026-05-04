@@ -34,9 +34,7 @@ func SyncSpaceCapacities() error {
 		}).
 		SetLimit(int64(batchSize))
 
-	cursor, err := database.Files().Find(ctx, bson.M{
-		"type":               models.FileTypeSpace,
-		"metadata.trashedAt": bson.M{"$exists": false}, // exclude trashed spaces
+	cursor, err := database.Workspaces().Find(ctx, bson.M{
 		"metadata.deletedAt": bson.M{"$exists": false}, // exclude soft-deleted spaces
 	}, opts)
 	if err != nil {
@@ -44,7 +42,7 @@ func SyncSpaceCapacities() error {
 	}
 	defer cursor.Close(ctx)
 
-	var spaces []models.File
+	var spaces []models.Workspace
 	if err := cursor.All(ctx, &spaces); err != nil {
 		return err
 	}
@@ -66,7 +64,7 @@ func SyncSpaceCapacities() error {
 
 // syncOneSpaceCapacity calculates file usage for a single space and updates it.
 // Sums metadata.size from files where spaceId == space.ID and type is not space/folder.
-func syncOneSpaceCapacity(ctx context.Context, space *models.File) error {
+func syncOneSpaceCapacity(ctx context.Context, space *models.Workspace) error {
 	// Single aggregate: sum files.metadata.size for all non-space/folder files in this space
 	// Excludes files in trash (metadata.trashedAt) or soft-deleted (metadata.deletedAt)
 	pipeline := mongo.Pipeline{
@@ -163,7 +161,7 @@ func syncOneSpaceCapacity(ctx context.Context, space *models.File) error {
 	}
 
 	// Update the space document
-	_, err = database.Files().UpdateOne(ctx,
+	_, err = database.Workspaces().UpdateOne(ctx,
 		bson.M{"_id": space.ID},
 		bson.M{
 			"$set": bson.M{

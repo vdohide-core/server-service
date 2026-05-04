@@ -17,7 +17,7 @@ type ApiKey struct {
 	Key         string     `bson:"key" json:"-"`
 	Prefix      string     `bson:"prefix" json:"prefix"`
 	CreatorID   *string    `bson:"creatorId,omitempty" json:"creatorId,omitempty" goose:"ref:user,index"`
-	SpaceID     string     `bson:"spaceId" json:"spaceId" goose:"ref:files,index,required"`
+	SpaceID     string     `bson:"spaceId" json:"spaceId" goose:"ref:workspaces,index,required"`
 	LastUsedAt  *time.Time `bson:"lastUsedAt,omitempty" json:"lastUsedAt,omitempty"`
 	ExpiresAt   *time.Time `bson:"expiresAt,omitempty" json:"expiresAt,omitempty"`
 	Enabled     bool       `bson:"enabled" json:"enabled"`

@@ -54,6 +54,7 @@ func Settings() *mongo.Collection      { return goose.Collection("settings") }
 func VideoProcess() *mongo.Collection  { return goose.Collection("video_process") }
 func Oauths() *mongo.Collection        { return goose.Collection("oauths") }
 func CustomDomains() *mongo.Collection    { return goose.Collection("custom_domains") }
+func Workspaces() *mongo.Collection       { return goose.Collection("workspaces") }
 func WorkspaceMembers() *mongo.Collection { return goose.Collection("workspace_members") }
 func ApiKeys() *mongo.Collection          { return goose.Collection("api_keys") }
 

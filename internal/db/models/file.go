@@ -24,27 +24,6 @@ type FileMetadata struct {
 	Playlist    *string     `bson:"playlist,omitempty" json:"playlist,omitempty"`
 }
 
-// FileCapacity holds storage capacity stats embedded in a File (space).
-// Matches: capacitySchema (TS)
-type FileCapacity struct {
-	Total      interface{} `bson:"total" json:"total"`
-	Used       interface{} `bson:"used" json:"used"`
-	Free       interface{} `bson:"free" json:"free"`
-	Percentage float64     `bson:"percentage" json:"percentage"`
-	UpdatedAt  *time.Time  `bson:"updatedAt,omitempty" json:"updatedAt,omitempty"`
-}
-
-// SpacePlan holds the subscription plan for a space (type=folder acting as space).
-// Matches: spacePlanSchema (TS)
-// planType: "free" = unlimited storage + ads; "paid" = storage limited to storageLimit
-type SpacePlan struct {
-	PlanType       string      `bson:"planType" json:"planType"`             // "free" | "paid"
-	StorageLimit   interface{} `bson:"storageLimit" json:"storageLimit"`     // bytes or null
-	StorageLimitTB *float64    `bson:"storageLimitTB" json:"storageLimitTB"` // TB purchased
-	PriceTotal     *float64    `bson:"priceTotal" json:"priceTotal"`         // THB
-	AdsEnabled     bool        `bson:"adsEnabled" json:"adsEnabled"`
-	ExpiresAt      *time.Time  `bson:"expiresAt,omitempty" json:"expiresAt,omitempty"`
-}
 
 // File represents a file/folder/space record.
 // Collection: "files" | _id: String (UUID)
@@ -59,12 +38,10 @@ type File struct {
 	Name       string        `bson:"name" json:"name" goose:"required"`
 	CreatorID  *string       `bson:"creatorId,omitempty" json:"creatorId,omitempty" goose:"index"`
 	ParentID   *string       `bson:"parentId,omitempty" json:"parentId,omitempty" goose:"ref:files,index"`
-	SpaceID    *string       `bson:"spaceId,omitempty" json:"spaceId,omitempty" goose:"ref:files,index"`
+	SpaceID    *string       `bson:"spaceId,omitempty" json:"spaceId,omitempty" goose:"ref:workspaces,index"`
 	Slug       string        `bson:"slug" json:"slug" goose:"unique,default:random(11),index"`
 	ClonedFrom *string       `bson:"clonedFrom,omitempty" json:"clonedFrom,omitempty" goose:"ref:files"`
 	Metadata   *FileMetadata `bson:"metadata,omitempty" json:"metadata,omitempty"`
-	Capacity   *FileCapacity `bson:"capacity,omitempty" json:"capacity,omitempty"`
-	Plan       *SpacePlan    `bson:"plan,omitempty" json:"plan,omitempty"`
 	CreatedAt  time.Time     `bson:"createdAt" json:"createdAt" goose:"default:now"`
 	UpdatedAt  time.Time     `bson:"updatedAt" json:"updatedAt" goose:"default:now"`
 }

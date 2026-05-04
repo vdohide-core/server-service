@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"server-service/internal/config"
 	"server-service/internal/db/database"
 	"server-service/internal/db/models"
 
@@ -393,7 +394,7 @@ func hetznerCreateServerNamed(cfg *HetznerAutoScaleConfig, name string) (string,
 	userData := fmt.Sprintf(
 		"#!/bin/bash\nset -e\nunset NVM_DIR\nexport HOME=/root\ncurl -fsSL %s | bash -s -- --mongodb-uri %q --storage-path %s --count %d\n",
 		cfg.InstallURL,
-		cfg.MongoURI,
+		config.AppConfig.MongoURI,
 		cfg.StoragePath,
 		cfg.DownloadsPerServer,
 	)
