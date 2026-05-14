@@ -140,6 +140,11 @@ func purgeS3Collection(
 		s3Deleted++
 	}
 
+	// Nothing to purge from DB — all records belong to local/unknown storage
+	if len(docIDs) == 0 {
+		return 0, nil
+	}
+
 	// Bulk-delete DB records
 	res, err := col.DeleteMany(ctx, bson.M{"_id": bson.M{"$in": docIDs}})
 	if err != nil {
