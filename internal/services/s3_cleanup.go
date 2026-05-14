@@ -117,19 +117,22 @@ func purgeS3Collection(
 		return 0, nil
 	}
 
-	// Delete S3 objects first
+	// Delete S3 objects first — only collect IDs of records that belong to
+	// an S3 storage so we don't accidentally purge local-storage media records.
 	s3Deleted := 0
 	var docIDs []string
 	for _, rec := range records {
-		docIDs = append(docIDs, rec.ID)
-
 		if rec.StorageID == nil || rec.Path == nil || *rec.Path == "" {
 			continue
 		}
 		storage, ok := storageMap[*rec.StorageID]
 		if !ok {
-			continue // not an S3 storage we know about
+			continue // local or unknown storage — skip entirely
 		}
+
+		// This record belongs to an S3 storage, mark it for DB deletion
+		docIDs = append(docIDs, rec.ID)
+
 		if err := deleteS3Object(ctx, storage, *rec.Path); err != nil {
 			log.Printf("  ⚠️ S3 delete failed [%s] %s: %v", label, rec.ID[:8], err)
 			continue
