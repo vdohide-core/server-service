@@ -5,7 +5,6 @@ import (
 	"log"
 	"time"
 
-	"server-service/internal/db/database"
 	"server-service/internal/db/models"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -22,8 +21,7 @@ func GetBatchCapacity() int {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	var setting models.Setting
-	err := database.Settings().FindOne(ctx, bson.M{"name": SettingBatchCapacity}).Decode(&setting)
+	setting, err := models.SettingModel.FindOne(ctx, bson.M{"name": SettingBatchCapacity})
 	if err != nil {
 		return DefaultBatchCapacity
 	}
@@ -37,8 +35,7 @@ func GetBatchCapacity() int {
 
 // GetDomainContent fetches the domain_content setting from database.
 func GetDomainContent(ctx context.Context) string {
-	var setting models.Setting
-	err := database.Settings().FindOne(ctx, bson.M{"name": "domain_content"}).Decode(&setting)
+	setting, err := models.SettingModel.FindOne(ctx, bson.M{"name": "domain_content"})
 	if err != nil {
 		return ""
 	}
@@ -50,8 +47,7 @@ func GetDomainContent(ctx context.Context) string {
 
 // GetDomainAsset fetches the domain_asset setting from database.
 func GetDomainAsset(ctx context.Context) string {
-	var setting models.Setting
-	err := database.Settings().FindOne(ctx, bson.M{"name": "domain_asset"}).Decode(&setting)
+	setting, err := models.SettingModel.FindOne(ctx, bson.M{"name": "domain_asset"})
 	if err != nil {
 		return ""
 	}
@@ -138,7 +134,7 @@ type hetznerSettingDoc struct {
 // Returns nil if the setting is missing or disabled.
 func GetHetznerAutoScale(ctx context.Context) *HetznerAutoScaleConfig {
 	var doc hetznerSettingDoc
-	err := database.Settings().FindOne(ctx, bson.M{"name": "hetzner_auto_scale"}).Decode(&doc)
+	err := models.SettingModel.Col().FindOne(ctx, bson.M{"name": "hetzner_auto_scale"}).Decode(&doc)
 	if err != nil {
 		return nil
 	}
@@ -151,8 +147,7 @@ func GetHetznerAutoScale(ctx context.Context) *HetznerAutoScaleConfig {
 // "hetzner_ssh_private_key" setting in the database.
 // Returns empty string if not configured.
 func GetHetznerSSHKey(ctx context.Context) string {
-	var s models.Setting
-	err := database.Settings().FindOne(ctx, bson.M{"name": "hetzner_ssh_private_key"}).Decode(&s)
+	s, err := models.SettingModel.FindOne(ctx, bson.M{"name": "hetzner_ssh_private_key"})
 	if err != nil {
 		return ""
 	}

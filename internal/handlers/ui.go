@@ -110,6 +110,24 @@ const logViewerHTML = `<!DOCTYPE html>
   .btn-sm { padding: 4px 10px; font-size: 12px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; font-family: inherit; transition: all .15s; }
   .btn-sm:hover { background: rgba(88,166,255,.1); border-color: var(--accent); color: var(--accent); }
 
+  /* ── Worker Panel ── */
+  .worker-stats { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+  .worker-stat {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 20px; display: flex; flex-direction: column; gap: 4px; min-width: 120px;
+  }
+  .worker-stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .worker-stat-value { font-size: 22px; font-weight: 600; }
+  .worker-card-disabled { opacity: .5; }
+  .progress-bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 2px; }
+  .progress-fill { height: 100%; border-radius: 3px; transition: width .3s; }
+  .progress-fill.green  { background: var(--green); }
+  .progress-fill.yellow { background: var(--yellow); }
+  .progress-fill.red    { background: var(--red); }
+  .worker-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+  .worker-tag.enabled  { background: rgba(63,185,80,.12); color: var(--green); }
+  .worker-tag.disabled { background: rgba(248,81,73,.12); color: var(--red); }
+
   /* Log modal */
   .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 100; display: none; align-items: center; justify-content: center; }
   .modal-overlay.open { display: flex; }
@@ -134,6 +152,7 @@ const logViewerHTML = `<!DOCTYPE html>
 <!-- Tabs -->
 <div class="tabs">
   <div class="tab active" onclick="switchTab('logs')">📋 Logs</div>
+  <div class="tab" onclick="switchTab('workers')">👷 Workers</div>
   <div class="tab" onclick="switchTab('hetzner')">🖥️ Hetzner</div>
 </div>
 
@@ -158,6 +177,20 @@ const logViewerHTML = `<!DOCTYPE html>
         <span id="line-count">—</span>
         <span id="last-update">—</span>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Workers Page ── -->
+<div class="page" id="page-workers">
+  <div class="htz-page">
+    <div class="htz-header">
+      <div class="htz-title">👷 Workers</div>
+      <button class="btn" onclick="loadWorkers()">↺ Refresh</button>
+    </div>
+    <div id="worker-stats" class="worker-stats"></div>
+    <div id="worker-grid" class="server-grid">
+      <div class="empty-state">Loading...</div>
     </div>
   </div>
 </div>
@@ -189,9 +222,11 @@ const logViewerHTML = `<!DOCTYPE html>
 <script>
 // ── Tab switching ───────────────────────────────────────────────────────
 function switchTab(tab) {
-  document.querySelectorAll('.tab').forEach((el, i) => el.classList.toggle('active', ['logs','hetzner'][i] === tab));
+  const tabs = ['logs','workers','hetzner'];
+  document.querySelectorAll('.tab').forEach((el, i) => el.classList.toggle('active', tabs[i] === tab));
   document.querySelectorAll('.page').forEach(el => el.classList.remove('active'));
   document.getElementById('page-' + tab).classList.add('active');
+  if (tab === 'workers') loadWorkers();
   if (tab === 'hetzner') loadHetznerServers();
 }
 
@@ -330,7 +365,94 @@ function fmtSize(b) {
   if (!b) return '0 B';
   if (b < 1024) return b + ' B';
   if (b < 1024*1024) return (b/1024).toFixed(1) + ' KB';
-  return (b/1024/1024).toFixed(1) + ' MB';
+  if (b < 1024*1024*1024) return (b/1024/1024).toFixed(1) + ' MB';
+  return (b/1024/1024/1024).toFixed(1) + ' GB';
+}
+
+function fmtAgo(iso) {
+  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  return Math.floor(s/3600) + 'h ago';
+}
+
+function pctColor(pct) {
+  if (pct >= 90) return 'red';
+  if (pct >= 70) return 'yellow';
+  return 'green';
+}
+
+// ── Workers tab ─────────────────────────────────────────────────────────
+async function loadWorkers() {
+  const grid = document.getElementById('worker-grid');
+  const stats = document.getElementById('worker-stats');
+  grid.innerHTML = '<div class="empty-state">Loading...</div>';
+  stats.innerHTML = '';
+  try {
+    const res = await fetch('/workers');
+    const data = await res.json();
+    const workers = data.workers || [];
+    if (!workers.length) {
+      grid.innerHTML = '<div class="empty-state">No workers registered</div>';
+      return;
+    }
+
+    // Stats summary
+    const online = workers.filter(w => w.isOnline).length;
+    const busy = workers.filter(w => w.isOnline && w.status === 'busy').length;
+    const idle = workers.filter(w => w.isOnline && w.status === 'idle').length;
+    const offlineN = workers.filter(w => !w.isOnline).length;
+    stats.innerHTML =
+      '<div class="worker-stat"><div class="worker-stat-label">Total</div><div class="worker-stat-value">' + workers.length + '</div></div>' +
+      '<div class="worker-stat"><div class="worker-stat-label">Online</div><div class="worker-stat-value" style="color:var(--green)">' + online + '</div></div>' +
+      '<div class="worker-stat"><div class="worker-stat-label">Busy</div><div class="worker-stat-value" style="color:var(--yellow)">' + busy + '</div></div>' +
+      '<div class="worker-stat"><div class="worker-stat-label">Idle</div><div class="worker-stat-value" style="color:var(--accent)">' + idle + '</div></div>' +
+      '<div class="worker-stat"><div class="worker-stat-label">Offline</div><div class="worker-stat-value" style="color:var(--red)">' + offlineN + '</div></div>';
+
+    // Worker cards
+    grid.innerHTML = workers.map(w => {
+      const statusCls = w.isOnline ? (w.status === 'busy' ? 'status-initializing' : 'status-running') : 'status-off';
+      const statusLabel = w.isOnline ? w.status : 'offline';
+      const enableTag = w.enable
+        ? '<span class="worker-tag enabled">✓ Enabled</span>'
+        : '<span class="worker-tag disabled">✗ Disabled</span>';
+      const cardCls = 'server-card' + (!w.enable ? ' worker-card-disabled' : '');
+
+      let sysHtml = '';
+      if (w.system) {
+        const s = w.system;
+        const diskPct = s.diskTotal > 0 ? Math.round(s.diskUsed / s.diskTotal * 100) : 0;
+        const memPct = s.memTotal > 0 ? Math.round(s.memUsed / s.memTotal * 100) : 0;
+        sysHtml =
+          '<div style="display:flex;flex-direction:column;gap:6px;margin-top:4px">' +
+            '<div style="font-size:11px;color:var(--muted)">Disk ' + fmtSize(s.diskUsed) + ' / ' + fmtSize(s.diskTotal) + ' (' + diskPct + '%)' +
+              '<div class="progress-bar"><div class="progress-fill ' + pctColor(diskPct) + '" style="width:' + diskPct + '%"></div></div>' +
+            '</div>' +
+            '<div style="font-size:11px;color:var(--muted)">Memory ' + fmtSize(s.memUsed) + ' / ' + fmtSize(s.memTotal) + ' (' + memPct + '%)' +
+              '<div class="progress-bar"><div class="progress-fill ' + pctColor(memPct) + '" style="width:' + memPct + '%"></div></div>' +
+            '</div>' +
+          '</div>';
+      }
+
+      return '<div class="' + cardCls + '">' +
+        '<div class="server-card-head">' +
+          '<div class="server-name">' + escHtml(w.workerId) + '</div>' +
+          '<div class="status-pill ' + statusCls + '">' + statusLabel + '</div>' +
+          enableTag +
+        '</div>' +
+        '<div class="server-meta">' +
+          '<span><span class="label">Host</span><strong>' + escHtml(w.hostname) + '</strong></span>' +
+          '<span><span class="label">IP</span>' + (w.ip || '—') + '</span>' +
+          '<span><span class="label">PID</span>' + w.pid + '</span>' +
+          '<span><span class="label">Jobs</span>' + w.activeJobs + ' / ' + w.maxJobs + '</span>' +
+          '<span><span class="label">Heartbeat</span>' + fmtAgo(w.heartbeatAt) + '</span>' +
+        '</div>' +
+        sysHtml +
+      '</div>';
+    }).join('');
+  } catch(e) {
+    grid.innerHTML = '<div class="empty-state" style="color:var(--red)">Failed to load: ' + e.message + '</div>';
+  }
 }
 
 connect();

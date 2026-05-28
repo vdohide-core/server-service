@@ -68,11 +68,17 @@ func main() {
 		// Start file cleanup scheduler (hard delete soft-deleted files, every 1 min)
 		go services.StartFileCleanupScheduler(ctx)
 
+		// Start space cleanup scheduler (mark files in deleted spaces for deletion, every 1 min)
+		go services.StartSpaceCleanupScheduler(ctx)
+
 		// Start S3 storage cleanup scheduler (purge media/ingest objects from S3, every 1 min)
 		go services.StartS3CleanupScheduler(ctx)
 
 		// Start Hetzner auto-scaler (spin up/down download servers based on pending videos)
 		go services.StartHetznerScalerScheduler(ctx)
+
+		// Start worker cleanup scheduler (mark stale workers offline, delete old ones)
+		go services.StartWorkerCleanupScheduler(ctx)
 
 		log.Println("✅ Schedulers enabled (production mode)")
 	} else {
@@ -104,6 +110,9 @@ func main() {
 
 	// Route: /ws — WebSocket (real-time log streaming)
 	mux.HandleFunc("/ws", h.HandleWS)
+
+	// Route: /workers — Worker management
+	mux.HandleFunc("/workers", h.HandleWorkerList)
 
 	// Route: /hetzner — Hetzner server management
 	mux.HandleFunc("/hetzner/servers", h.HandleHetznerServers)
@@ -143,6 +152,7 @@ func main() {
 	log.Printf("   ⏱️  Domain CNAME verify     - every 1 min (batch=5)")
 	log.Printf("   ⏱️  File cleanup            - every 1 min (batch=5)")
 	log.Printf("   ⏱️  S3 storage cleanup      - every 1 min")
+	log.Printf("   ⏱️  Worker cleanup          - every 1 min")
 
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("❌ Server error: %v", err)

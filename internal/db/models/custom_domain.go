@@ -3,7 +3,7 @@ package models
 import (
 	"time"
 
-	"server-service/internal/lib/goose"
+	"github.com/zergolf1994/goose"
 )
 
 // PlayerConfig holds video player configuration for a custom domain.
@@ -57,7 +57,9 @@ type DomainDNS struct {
 	Value             string     `bson:"value" json:"value"`
 	TTL               int        `bson:"ttl" json:"ttl"`
 	VerificationToken string     `bson:"verificationToken" json:"verificationToken"`
+	RetryCount        int        `bson:"retryCount" json:"retryCount"`
 	LastVerified      *time.Time `bson:"lastVerified,omitempty" json:"lastVerified,omitempty"`
+	Reason            *string    `bson:"reason,omitempty" json:"reason,omitempty"`
 }
 
 // CustomDomain represents a custom domain with player/ad config.

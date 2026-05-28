@@ -3,7 +3,7 @@ package models
 import (
 	"time"
 
-	"server-service/internal/lib/goose"
+	"github.com/zergolf1994/goose"
 )
 
 // Account represents an authentication account (better-auth).

@@ -3,11 +3,11 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
 
-	"server-service/internal/db/database"
 	"server-service/internal/db/models"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -16,9 +16,17 @@ import (
 
 // ─── Domain Verification ─────────────────────────────────────────────
 
+const (
+	// domainVerifyCooldown is the minimum wait after the first verify attempt.
+	domainVerifyCooldown = 5 * time.Minute
+	// domainMaxRetries is the max retry count before marking failed.
+	domainMaxRetries = 3
+)
+
 // SyncDomainVerifications fetches pending custom domains and verifies
 // their CNAME records. Updates status to "active" if verified.
-// Batch size is read from settings (batch_capacity), default 5.
+// Skips domains that were verified less than 5 minutes ago.
+// After 3 failed retries, marks the domain as "failed".
 func SyncDomainVerifications() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -26,6 +34,8 @@ func SyncDomainVerifications() error {
 	batchSize := GetBatchCapacity()
 
 	// Fetch only pending domains, oldest-verified (or never verified) first
+	// Skip domains that were verified less than 5 minutes ago
+	cooldownCutoff := time.Now().Add(-domainVerifyCooldown)
 	opts := options.Find().
 		SetSort(bson.D{
 			{Key: "dns.lastVerified", Value: 1},
@@ -33,9 +43,14 @@ func SyncDomainVerifications() error {
 		}).
 		SetLimit(int64(batchSize))
 
-	cursor, err := database.CustomDomains().Find(ctx, bson.M{
+	cursor, err := models.CustomDomainModel.Col().Find(ctx, bson.M{
 		"status": models.DomainStatusPending,
 		"dns":    bson.M{"$exists": true},
+		"$or": bson.A{
+			bson.M{"dns.lastVerified": bson.M{"$exists": false}},
+			bson.M{"dns.lastVerified": nil},
+			bson.M{"dns.lastVerified": bson.M{"$lte": cooldownCutoff}},
+		},
 	}, opts)
 	if err != nil {
 		return err
@@ -62,25 +77,67 @@ func SyncDomainVerifications() error {
 
 // verifyDomainHTTP verifies a domain by calling its /health endpoint.
 // Expects: {"status":"ok","service":"server-player"}
+// On failure: increments retryCount. After 3 retries → status="failed" with reason.
 func verifyDomainHTTP(ctx context.Context, domain *models.CustomDomain) {
 	url := "http://" + domain.Name + "/health"
+	now := time.Now()
+
+	retryCount := 0
+	if domain.DNS != nil {
+		retryCount = domain.DNS.RetryCount
+	}
+
+	// Helper: mark domain as failed
+	markFailed := func(reason string) {
+		_, _ = models.CustomDomainModel.UpdateOne(ctx,
+			bson.M{"_id": domain.ID},
+			bson.M{"$set": bson.M{
+				"status":           models.DomainStatusFailed,
+				"dns.retryCount":   retryCount + 1,
+				"dns.lastVerified": now,
+				"dns.reason":       reason,
+				"updatedAt":        now,
+			}},
+		)
+		log.Printf("  ❌ [%s] \"%s\" → failed (%s)", domain.ID[:8], domain.Name, reason)
+	}
+
+	// Helper: increment retry count
+	incrementRetry := func(reason string) {
+		newCount := retryCount + 1
+		if newCount >= domainMaxRetries {
+			markFailed(reason)
+			return
+		}
+		_, _ = models.CustomDomainModel.UpdateOne(ctx,
+			bson.M{"_id": domain.ID},
+			bson.M{"$set": bson.M{
+				"dns.retryCount":   newCount,
+				"dns.lastVerified": now,
+				"dns.reason":       reason,
+				"updatedAt":        now,
+			}},
+		)
+		log.Printf("  ⏳ [%s] \"%s\" — retry %d/%d (%s)",
+			domain.ID[:8], domain.Name, newCount, domainMaxRetries, reason)
+	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		log.Printf("  ❌ [%s] \"%s\" — request error: %v", domain.ID[:8], domain.Name, err)
+		incrementRetry("request error: " + err.Error())
 		return
 	}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("  ❌ [%s] \"%s\" — unreachable: %v", domain.ID[:8], domain.Name, err)
+		incrementRetry("unreachable")
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("  ⏳ [%s] \"%s\" — HTTP %d (want 200)", domain.ID[:8], domain.Name, resp.StatusCode)
+		incrementRetry(fmt.Sprintf("HTTP %d (want 200)", resp.StatusCode))
 		return
 	}
 
@@ -89,21 +146,25 @@ func verifyDomainHTTP(ctx context.Context, domain *models.CustomDomain) {
 		Service string `json:"service"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		log.Printf("  ⏳ [%s] \"%s\" — invalid JSON response", domain.ID[:8], domain.Name)
+		incrementRetry("invalid JSON response")
 		return
 	}
 
-	now := time.Now()
-
 	if body.Status == "ok" && body.Service == "server-player" {
-		// Verified — mark active
-		_, err = database.CustomDomains().UpdateOne(ctx,
+		// Verified — mark active, reset retryCount
+		_, err = models.CustomDomainModel.UpdateOne(ctx,
 			bson.M{"_id": domain.ID},
-			bson.M{"$set": bson.M{
-				"status":           models.DomainStatusActive,
-				"dns.lastVerified": now,
-				"updatedAt":        now,
-			}},
+			bson.M{
+				"$set": bson.M{
+					"status":           models.DomainStatusActive,
+					"dns.retryCount":   0,
+					"dns.lastVerified": now,
+					"updatedAt":        now,
+				},
+				"$unset": bson.M{
+					"dns.reason": "",
+				},
+			},
 		)
 		if err != nil {
 			log.Printf("  ⚠️ [%s] \"%s\" — failed to update status: %v", domain.ID[:8], domain.Name, err)
@@ -111,16 +172,7 @@ func verifyDomainHTTP(ctx context.Context, domain *models.CustomDomain) {
 		}
 		log.Printf("  ✅ [%s] \"%s\" → active", domain.ID[:8], domain.Name)
 	} else {
-		// Wrong service — update lastVerified to rotate to back of queue
-		_, _ = database.CustomDomains().UpdateOne(ctx,
-			bson.M{"_id": domain.ID},
-			bson.M{"$set": bson.M{
-				"dns.lastVerified": now,
-				"updatedAt":        now,
-			}},
-		)
-		log.Printf("  ⏳ [%s] \"%s\" — wrong service (got: status=%s service=%s)",
-			domain.ID[:8], domain.Name, body.Status, body.Service)
+		incrementRetry(fmt.Sprintf("wrong service (status=%s service=%s)", body.Status, body.Service))
 	}
 }
 

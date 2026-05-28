@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"server-service/internal/db/database"
 	"server-service/internal/db/models"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -36,7 +35,7 @@ func SyncS3Cleanup() error {
 	defer cancel()
 
 	// ── 1. Find IDs of all soft-deleted files ─────────────────────────
-	cur, err := database.Files().Find(ctx,
+	cur, err := models.FileModel.Col().Find(ctx,
 		bson.M{"metadata.deletedAt": bson.M{"$exists": true}},
 		options.Find().SetProjection(bson.M{"_id": 1}),
 	)
@@ -71,13 +70,13 @@ func SyncS3Cleanup() error {
 	log.Printf("🪣  S3 cleanup: %d deleted file(s), %d S3 storage(s) found", len(fileIDs), len(storageMap))
 
 	// ── 3. Purge medias ───────────────────────────────────────────────
-	mDel, err := purgeS3Collection(ctx, database.Medias(), fileIDs, storageMap, "media")
+	mDel, err := purgeS3Collection(ctx, models.MediaModel.Col(), fileIDs, storageMap, "media")
 	if err != nil {
 		log.Printf("  ⚠️ media S3 purge error: %v", err)
 	}
 
 	// ── 4. Purge ingests ──────────────────────────────────────────────
-	iDel, err := purgeS3Collection(ctx, database.Ingests(), fileIDs, storageMap, "ingest")
+	iDel, err := purgeS3Collection(ctx, models.IngestModel.Col(), fileIDs, storageMap, "ingest")
 	if err != nil {
 		log.Printf("  ⚠️ ingest S3 purge error: %v", err)
 	}
@@ -100,7 +99,10 @@ func purgeS3Collection(
 	label string,
 ) (int64, error) {
 	cur, err := col.Find(ctx,
-		bson.M{"fileId": bson.M{"$in": fileIDs}},
+		bson.M{
+			"fileId":    bson.M{"$in": fileIDs},
+			"deletedAt": bson.M{"$exists": true}, // เฉพาะที่ถูก mark ลบแล้วเท่านั้น
+		},
 		options.Find().SetProjection(bson.M{"_id": 1, "storageId": 1, "path": 1}),
 	)
 	if err != nil {
@@ -117,9 +119,9 @@ func purgeS3Collection(
 		return 0, nil
 	}
 
-	// Delete S3 objects first — only collect IDs of records that belong to
-	// an S3 storage so we don't accidentally purge local-storage media records.
+	// ลบ S3 objects — เช็ค clone ก่อนลบ
 	s3Deleted := 0
+	s3Skipped := 0
 	var docIDs []string
 	for _, rec := range records {
 		if rec.StorageID == nil || rec.Path == nil || *rec.Path == "" {
@@ -127,11 +129,24 @@ func purgeS3Collection(
 		}
 		storage, ok := storageMap[*rec.StorageID]
 		if !ok {
-			continue // local or unknown storage — skip entirely
+			continue // local หรือ storage ไม่รู้จัก — ข้าม
 		}
 
-		// This record belongs to an S3 storage, mark it for DB deletion
+		// record นี้อยู่ใน S3 → mark ลบ DB record
 		docIDs = append(docIDs, rec.ID)
+
+		// เช็คว่ามี media อื่นที่ใช้ path + storageId เดียวกัน และยังไม่ถูกลบ (clone ยังใช้อยู่)
+		activeCount, _ := col.CountDocuments(ctx, bson.M{
+			"_id":       bson.M{"$ne": rec.ID},
+			"storageId": *rec.StorageID,
+			"path":      *rec.Path,
+			"deletedAt": bson.M{"$exists": false},
+		})
+		if activeCount > 0 {
+			// ยังมี clone ใช้อยู่ — ลบแค่ DB record ไม่ลบ S3 object
+			s3Skipped++
+			continue
+		}
 
 		if err := deleteS3Object(ctx, storage, *rec.Path); err != nil {
 			log.Printf("  ⚠️ S3 delete failed [%s] %s: %v", label, rec.ID[:8], err)
@@ -140,7 +155,7 @@ func purgeS3Collection(
 		s3Deleted++
 	}
 
-	// Bulk-delete DB records (skip if no S3 records matched)
+	// ลบ DB records ทั้งหมด (ไม่ว่า S3 จะลบหรือข้าม)
 	if len(docIDs) == 0 {
 		return 0, nil
 	}
@@ -150,8 +165,13 @@ func purgeS3Collection(
 		return 0, fmt.Errorf("delete %s DB records: %w", label, err)
 	}
 
-	log.Printf("  ✅ %s: %d S3 object(s) deleted, %d DB record(s) removed",
-		label, s3Deleted, res.DeletedCount)
+	if s3Skipped > 0 {
+		log.Printf("  ✅ %s: %d S3 deleted, %d S3 skipped (clone ยังใช้อยู่), %d DB removed",
+			label, s3Deleted, s3Skipped, res.DeletedCount)
+	} else {
+		log.Printf("  ✅ %s: %d S3 object(s) deleted, %d DB record(s) removed",
+			label, s3Deleted, res.DeletedCount)
+	}
 
 	return res.DeletedCount, nil
 }
@@ -160,7 +180,7 @@ func purgeS3Collection(
 
 // loadS3StorageMap returns all S3-type storages keyed by their ID.
 func loadS3StorageMap(ctx context.Context) (map[string]*models.Storage, error) {
-	cur, err := database.Storages().Find(ctx, bson.M{"type": "s3"})
+	cur, err := models.StorageModel.Col().Find(ctx, bson.M{"type": "s3"})
 	if err != nil {
 		return nil, err
 	}

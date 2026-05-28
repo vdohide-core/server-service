@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"server-service/internal/config"
-	"server-service/internal/db/database"
 	"server-service/internal/db/models"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -128,7 +127,7 @@ func SyncHetznerScaler() error {
 		}}},
 	}
 
-	countCur, err := database.Files().Aggregate(ctx, countPipeline)
+	countCur, err := models.FileModel.Aggregate(ctx, countPipeline)
 	if err != nil {
 		return fmt.Errorf("count pending aggregate: %w", err)
 	}
@@ -235,7 +234,7 @@ func SyncHetznerScaler() error {
 				}
 
 				// ── เช็ค active jobs ───────────────────────────────────────
-				activeJobs, err := database.VideoProcess().CountDocuments(ctx, bson.M{
+				activeJobs, err := models.VideoProcessModel.CountDocuments(ctx, bson.M{
 					"workerId": bson.M{"$regex": "^" + s.Name + "@"},
 					"status":   bson.M{"$in": bson.A{models.ProcessStatusPending, models.ProcessStatusProcessing}},
 				})
@@ -305,7 +304,7 @@ func SyncHetznerScaler() error {
 		}
 
 		// Check active jobs before deleting
-		activeJobs, err := database.VideoProcess().CountDocuments(ctx, bson.M{
+		activeJobs, err := models.VideoProcessModel.CountDocuments(ctx, bson.M{
 			"workerId": bson.M{"$regex": "^" + s.Name + "@"},
 			"status":   bson.M{"$in": bson.A{models.ProcessStatusPending, models.ProcessStatusProcessing}},
 		})

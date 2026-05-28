@@ -3,7 +3,7 @@ package models
 import (
 	"time"
 
-	"server-service/internal/lib/goose"
+	"github.com/zergolf1994/goose"
 )
 
 // WorkspaceMember represents a workspace membership.
@@ -31,10 +31,11 @@ type WorkspaceMetadata struct {
 
 // WorkspaceCapacity holds storage capacity stats embedded in a Workspace.
 type WorkspaceCapacity struct {
-	Total      interface{} `bson:"total" json:"total"`
-	Used       interface{} `bson:"used" json:"used"`
-	Free       interface{} `bson:"free" json:"free"`
-	Percentage float64     `bson:"percentage" json:"percentage"`
+	Total       interface{} `bson:"total" json:"total"`
+	Used        interface{} `bson:"used" json:"used"`
+	Free        interface{} `bson:"free" json:"free"`
+	Percentage  float64     `bson:"percentage" json:"percentage"`
+	LastUpdated *time.Time  `bson:"lastUpdated,omitempty" json:"lastUpdated,omitempty"`
 }
 
 // WorkspacePlan holds the subscription plan for a workspace.

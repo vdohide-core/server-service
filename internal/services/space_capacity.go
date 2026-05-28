@@ -5,7 +5,6 @@ import (
 	"log"
 	"time"
 
-	"server-service/internal/db/database"
 	"server-service/internal/db/models"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -29,12 +28,12 @@ func SyncSpaceCapacities() error {
 	// → null/missing updatedAt comes first (never synced), then oldest-synced first
 	opts := options.Find().
 		SetSort(bson.D{
-			{Key: "capacity.updatedAt", Value: 1},
+			{Key: "capacity.lastUpdated", Value: 1},
 			{Key: "createdAt", Value: 1},
 		}).
 		SetLimit(int64(batchSize))
 
-	cursor, err := database.Workspaces().Find(ctx, bson.M{
+	cursor, err := models.WorkspaceModel.Col().Find(ctx, bson.M{
 		"metadata.deletedAt": bson.M{"$exists": false}, // exclude soft-deleted spaces
 	}, opts)
 	if err != nil {
@@ -87,7 +86,7 @@ func syncOneSpaceCapacity(ctx context.Context, space *models.Workspace) error {
 		}}},
 	}
 
-	aggCursor, err := database.Files().Aggregate(ctx, pipeline)
+	aggCursor, err := models.FileModel.Aggregate(ctx, pipeline)
 	if err != nil {
 		return err
 	}
@@ -106,21 +105,23 @@ func syncOneSpaceCapacity(ctx context.Context, space *models.Workspace) error {
 
 	// Determine total capacity from plan.storageLimit
 	// 0 or missing = unlimited (represented as nil)
+	const TB int64 = 1024 * 1024 * 1024 * 1024
 	var totalBytes *int64
 	if space.Plan != nil && space.Plan.StorageLimit != nil {
 		switch v := space.Plan.StorageLimit.(type) {
 		case int64:
 			if v > 0 {
-				totalBytes = &v
+				t := v * TB
+				totalBytes = &t
 			}
 		case int32:
 			if v > 0 {
-				t := int64(v)
+				t := int64(v) * TB
 				totalBytes = &t
 			}
 		case float64:
 			if v > 0 {
-				t := int64(v)
+				t := int64(v * float64(TB))
 				totalBytes = &t
 			}
 		}
@@ -145,9 +146,9 @@ func syncOneSpaceCapacity(ctx context.Context, space *models.Workspace) error {
 	// Build capacity document
 	now := time.Now()
 	capacity := bson.M{
-		"used":       usedBytes,
-		"percentage": percentage,
-		"updatedAt":  now,
+		"used":        usedBytes,
+		"percentage":  percentage,
+		"lastUpdated": now,
 	}
 	if totalBytes != nil {
 		capacity["total"] = *totalBytes
@@ -161,12 +162,12 @@ func syncOneSpaceCapacity(ctx context.Context, space *models.Workspace) error {
 	}
 
 	// Update the space document
-	_, err = database.Workspaces().UpdateOne(ctx,
+	// Use .Col() directly to bypass goose auto-inject updatedAt
+	_, err = models.WorkspaceModel.Col().UpdateOne(ctx,
 		bson.M{"_id": space.ID},
 		bson.M{
 			"$set": bson.M{
-				"capacity":  capacity,
-				"updatedAt": time.Now(),
+				"capacity": capacity,
 			},
 		},
 	)

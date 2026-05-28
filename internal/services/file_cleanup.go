@@ -5,11 +5,11 @@ import (
 	"log"
 	"time"
 
-	"server-service/internal/db/database"
 	"server-service/internal/db/models"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 // ─── File Cleanup (Hard Delete) ───────────────────────────────────────
@@ -34,30 +34,7 @@ func SyncFileCleanup() error {
 
 	var targets []cleanTarget
 
-	// ── 1. Spaces: no files left with spaceId == _id ────────────────
-	spacePipeline := mongo.Pipeline{
-		{{Key: "$match", Value: bson.D{
-			{Key: "type", Value: models.FileTypeSpace},
-			{Key: "metadata.deletedAt", Value: bson.D{{Key: "$exists", Value: true}}},
-		}}},
-		{{Key: "$lookup", Value: bson.D{
-			{Key: "from", Value: "files"},
-			{Key: "localField", Value: "_id"},
-			{Key: "foreignField", Value: "spaceId"},
-			{Key: "as", Value: "_children"},
-		}}},
-		{{Key: "$match", Value: bson.D{
-			{Key: "_children", Value: bson.D{{Key: "$size", Value: 0}}},
-		}}},
-		{{Key: "$limit", Value: limit}},
-		{{Key: "$project", Value: bson.D{
-			{Key: "_id", Value: 1},
-			{Key: "name", Value: 1},
-			{Key: "type", Value: 1},
-		}}},
-	}
-
-	// ── 2. Folders: no files left with parentId == _id ───────────────
+	// ── 1. Folders: no files left with parentId == _id ───────────────
 	folderPipeline := mongo.Pipeline{
 		{{Key: "$match", Value: bson.D{
 			{Key: "type", Value: models.FileTypeFolder},
@@ -80,7 +57,7 @@ func SyncFileCleanup() error {
 		}}},
 	}
 
-	// ── 3. Other files: no media AND no ingest records with fileId == _id
+	// ── 2. Other files: no media AND no ingest records with fileId == _id
 	filePipeline := mongo.Pipeline{
 		{{Key: "$match", Value: bson.D{
 			{Key: "type", Value: bson.D{{Key: "$nin", Value: bson.A{models.FileTypeSpace, models.FileTypeFolder}}}},
@@ -117,9 +94,9 @@ func SyncFileCleanup() error {
 		}}},
 	}
 
-	// Run all 3 aggregations
-	for _, pipeline := range []mongo.Pipeline{spacePipeline, folderPipeline, filePipeline} {
-		cur, err := database.Files().Aggregate(ctx, pipeline)
+	// Run folder + file aggregations
+	for _, pipeline := range []mongo.Pipeline{folderPipeline, filePipeline} {
+		cur, err := models.FileModel.Aggregate(ctx, pipeline)
 		if err != nil {
 			return err
 		}
@@ -138,52 +115,62 @@ func SyncFileCleanup() error {
 
 	log.Printf("🗑️  Hard deleting %d file(s) ready for cleanup...", len(targets))
 
-	// Split by type
-	var spaceIDs, otherIDs []string
-
-	for _, t := range targets {
-		if t.Type == models.FileTypeSpace {
-			spaceIDs = append(spaceIDs, t.ID)
-		} else {
-			otherIDs = append(otherIDs, t.ID)
-		}
-	}
-
 	deleted := int64(0)
 
-	// ── Spaces: cascade DeleteMany then delete files ─────────────────
-	if len(spaceIDs) > 0 {
-		spaceFilter := bson.M{"spaceId": bson.M{"$in": spaceIDs}}
+	// Collect all target IDs for starred cleanup
+	allIDs := make([]string, 0, len(targets))
+	for _, t := range targets {
+		allIDs = append(allIDs, t.ID)
+	}
 
-		members, _ := database.WorkspaceMembers().DeleteMany(ctx, spaceFilter)
-		domains, _ := database.CustomDomains().DeleteMany(ctx, spaceFilter)
-		oauths, _  := database.Oauths().DeleteMany(ctx, spaceFilter)
-		apiKeys, _ := database.ApiKeys().DeleteMany(ctx, spaceFilter)
+	// ── Starred: delete all starreds referencing deleted files ────────
+	starreds, _ := models.StarredModel.DeleteMany(ctx, bson.M{"fileId": bson.M{"$in": allIDs}})
 
-		res, err := database.Files().DeleteMany(ctx, bson.M{"_id": bson.M{"$in": spaceIDs}})
-		if err != nil {
-			log.Printf("  ⚠️ space bulk delete failed: %v", err)
-		} else {
-			deleted += res.DeletedCount
-			log.Printf("  ✅ %d space(s) hard deleted — members=%d domains=%d oauths=%d apiKeys=%d",
-				res.DeletedCount, members.DeletedCount, domains.DeletedCount,
-				oauths.DeletedCount, apiKeys.DeletedCount,
-			)
+	// ── Files: single DeleteMany ────────────────────────────────────
+	res, err := models.FileModel.DeleteMany(ctx, bson.M{"_id": bson.M{"$in": allIDs}})
+	if err != nil {
+		log.Printf("  ⚠️ file bulk delete failed: %v", err)
+	} else {
+		deleted += res.DeletedCount
+		log.Printf("  ✅ %d file(s) hard deleted", res.DeletedCount)
+	}
+	// ── Orphaned starreds: fileId → check via _id index (fast) ──────
+	allFileIDs, err := models.StarredModel.Col().Distinct(ctx, "fileId", bson.M{})
+	if err == nil && len(allFileIDs) > 0 {
+		fileIDStrs := make([]string, 0, len(allFileIDs))
+		for _, id := range allFileIDs {
+			if s, ok := id.(string); ok {
+				fileIDStrs = append(fileIDStrs, s)
+			}
+		}
+
+		cur, err := models.FileModel.Col().Find(ctx, bson.M{"_id": bson.M{"$in": fileIDStrs}}, options.Find().SetProjection(bson.M{"_id": 1}))
+		if err == nil {
+			existingIDs := make(map[string]bool)
+			for cur.Next(ctx) {
+				var doc struct{ ID string `bson:"_id"` }
+				if cur.Decode(&doc) == nil {
+					existingIDs[doc.ID] = true
+				}
+			}
+			cur.Close(ctx)
+
+			var orphanedFileIDs []string
+			for _, id := range fileIDStrs {
+				if !existingIDs[id] {
+					orphanedFileIDs = append(orphanedFileIDs, id)
+				}
+			}
+
+			if len(orphanedFileIDs) > 0 {
+				if res, err := models.StarredModel.DeleteMany(ctx, bson.M{"fileId": bson.M{"$in": orphanedFileIDs}}); err == nil {
+					starreds.DeletedCount += res.DeletedCount
+				}
+			}
 		}
 	}
 
-	// ── Other files: single DeleteMany ──────────────────────────────
-	if len(otherIDs) > 0 {
-		res, err := database.Files().DeleteMany(ctx, bson.M{"_id": bson.M{"$in": otherIDs}})
-		if err != nil {
-			log.Printf("  ⚠️ file bulk delete failed: %v", err)
-		} else {
-			deleted += res.DeletedCount
-			log.Printf("  ✅ %d file(s) hard deleted", res.DeletedCount)
-		}
-	}
-
-	log.Printf("🗑️  Done: %d hard deleted", deleted)
+	log.Printf("🗑️  Done: %d hard deleted, starreds=%d", deleted, starreds.DeletedCount)
 	return nil
 }
 

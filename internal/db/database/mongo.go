@@ -6,7 +6,8 @@ import (
 	"time"
 
 	"server-service/internal/config"
-	"server-service/internal/lib/goose"
+	"server-service/internal/db/models"
+	"github.com/zergolf1994/goose"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -39,25 +40,6 @@ func DB() *mongo.Database {
 	return goose.DB()
 }
 
-// Collection returns a collection by name (delegates to goose).
-func Collection(name string) *mongo.Collection {
-	return goose.Collection(name)
-}
-
-// ─── Collection Accessors ─────────────────────────────────────
-
-func Files() *mongo.Collection         { return goose.Collection("files") }
-func Medias() *mongo.Collection        { return goose.Collection("medias") }
-func Storages() *mongo.Collection      { return goose.Collection("storages") }
-func Ingests() *mongo.Collection       { return goose.Collection("ingests") }
-func Settings() *mongo.Collection      { return goose.Collection("settings") }
-func VideoProcess() *mongo.Collection  { return goose.Collection("video_process") }
-func Oauths() *mongo.Collection        { return goose.Collection("oauths") }
-func CustomDomains() *mongo.Collection    { return goose.Collection("custom_domains") }
-func Workspaces() *mongo.Collection       { return goose.Collection("workspaces") }
-func WorkspaceMembers() *mongo.Collection { return goose.Collection("workspace_members") }
-func ApiKeys() *mongo.Collection          { return goose.Collection("api_keys") }
-
 // ─── Indexes ──────────────────────────────────────────────────
 
 // EnsureIndexes creates required indexes for concurrency safety.
@@ -65,9 +47,11 @@ func EnsureIndexes() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	vpCol := models.VideoProcessModel.Col()
+
 	// Drop stale indexes
-	VideoProcess().Indexes().DropOne(ctx, "postId_1")
-	VideoProcess().Indexes().DropOne(ctx, "fileId_1")
+	vpCol.Indexes().DropOne(ctx, "postId_1")
+	vpCol.Indexes().DropOne(ctx, "fileId_1")
 
 	// Clean up duplicate fileId records before creating unique index
 	pipeline := mongo.Pipeline{
@@ -78,7 +62,7 @@ func EnsureIndexes() {
 		}}},
 		{{Key: "$match", Value: bson.D{{Key: "count", Value: bson.D{{Key: "$gt", Value: 1}}}}}},
 	}
-	cursor, err := VideoProcess().Aggregate(ctx, pipeline)
+	cursor, err := vpCol.Aggregate(ctx, pipeline)
 	if err == nil {
 		type DupResult struct {
 			FileID string   `bson:"_id"`
@@ -89,7 +73,7 @@ func EnsureIndexes() {
 			var dup DupResult
 			if cursor.Decode(&dup) == nil && len(dup.IDs) > 1 {
 				deleteIDs := dup.IDs[1:]
-				VideoProcess().DeleteMany(ctx, bson.M{"_id": bson.M{"$in": deleteIDs}})
+				vpCol.DeleteMany(ctx, bson.M{"_id": bson.M{"$in": deleteIDs}})
 				log.Printf("🧹 Removed %d duplicate video_process for fileId %s", len(deleteIDs), dup.FileID)
 			}
 		}
@@ -97,7 +81,7 @@ func EnsureIndexes() {
 	}
 
 	// Unique index on video_process.fileId
-	_, err = VideoProcess().Indexes().CreateOne(ctx, mongo.IndexModel{
+	_, err = vpCol.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "fileId", Value: 1}},
 		Options: options.Index().SetUnique(true).SetSparse(true),
 	})
