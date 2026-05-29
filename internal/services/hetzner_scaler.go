@@ -161,16 +161,37 @@ func SyncHetznerScaler() error {
 		fastNeeded = int(math.Ceil(float64(fastPending) / float64(cfg.FastPerServer)))
 	}
 
-	// ── 3. List current managed servers ──────────────────────────────
+	// ── 3. Query online worker capacity from heartbeat data ──────────
+	staleCutoff := time.Now().Add(-3 * time.Minute) // same as worker_cleanup stale timeout
+	onlineWorkers, err := models.WorkerModel.Find(ctx, bson.M{
+		"heartbeatAt": bson.M{"$gte": staleCutoff},
+		"enable":      true,
+	})
+	if err != nil {
+		log.Printf("⚠️ Hetzner scaler: failed to query workers: %v", err)
+		onlineWorkers = nil // continue without worker data
+	}
+
+	var totalWorkerSlots, busyWorkerSlots, idleWorkerSlots int
+	for _, w := range onlineWorkers {
+		totalWorkerSlots += w.MaxJobs
+		busyWorkerSlots += w.ActiveJobs
+	}
+	idleWorkerSlots = totalWorkerSlots - busyWorkerSlots
+	if idleWorkerSlots < 0 {
+		idleWorkerSlots = 0
+	}
+
+	// ── 4. List current managed servers ──────────────────────────────
 	current, err := hetznerListServers(cfg.APIToken)
 	if err != nil {
 		return fmt.Errorf("list servers: %w", err)
 	}
 
-	log.Printf("🖥️  Hetzner scaler: pending=%d (slow/missav=%d, fast/others=%d) current_servers=%d",
-		pending, slowPending, fastPending, len(current))
+	log.Printf("🖥️  Hetzner scaler: pending=%d (slow/missav=%d, fast/others=%d) workers=%d (idle_slots=%d, busy=%d) servers=%d",
+		pending, slowPending, fastPending, len(onlineWorkers), idleWorkerSlots, busyWorkerSlots, len(current))
 
-	// ── 4. Scale decision ─────────────────────────────────────────────
+	// ── 5. Scale decision ─────────────────────────────────────────────
 	if pending > 0 {
 		// Reset idle timer
 		idleTracker.Lock()
@@ -183,6 +204,21 @@ func SyncHetznerScaler() error {
 		}
 		if needed < 1 {
 			needed = 1
+		}
+
+		// Factor in existing worker capacity:
+		// If online workers already have idle slots, reduce the number of servers needed.
+		// Each server provides ~downloadsPerServer worker slots, so subtract servers
+		// that are effectively covered by existing idle capacity.
+		if idleWorkerSlots > 0 && cfg.DownloadsPerServer > 0 {
+			coveredByWorkers := idleWorkerSlots / cfg.DownloadsPerServer
+			if coveredByWorkers > 0 {
+				log.Printf("🖥️  Worker capacity: %d idle slots cover ~%d server(s)", idleWorkerSlots, coveredByWorkers)
+				needed -= coveredByWorkers
+				if needed < 0 {
+					needed = 0
+				}
+			}
 		}
 
 		diff := needed - len(current)
@@ -202,7 +238,7 @@ func SyncHetznerScaler() error {
 				break
 			}
 
-			log.Printf("🖥️  Scale UP: creating %d server(s) (pending=%d needed=%d)", diff, pending, needed)
+			log.Printf("🖥️  Scale UP: creating %d server(s) (pending=%d needed=%d workers_idle=%d)", diff, pending, needed, idleWorkerSlots)
 			ts := time.Now().Unix()
 			for i := 0; i < diff; i++ {
 				// unique name: vdohide-dl-{timestamp}-{i}
@@ -256,7 +292,7 @@ func SyncHetznerScaler() error {
 			}
 
 		default:
-			log.Printf("🖥️  No scaling needed (needed=%d current=%d)", needed, len(current))
+			log.Printf("🖥️  No scaling needed (needed=%d current=%d workers_idle=%d)", needed, len(current), idleWorkerSlots)
 		}
 
 		return nil
