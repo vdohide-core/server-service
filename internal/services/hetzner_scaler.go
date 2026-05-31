@@ -166,6 +166,7 @@ func SyncHetznerScaler() error {
 	onlineWorkers, err := models.WorkerModel.Find(ctx, bson.M{
 		"heartbeatAt": bson.M{"$gte": staleCutoff},
 		"enable":      true,
+		"type":        models.WorkerTypeDownload,
 	})
 	if err != nil {
 		log.Printf("⚠️ Hetzner scaler: failed to query workers: %v", err)

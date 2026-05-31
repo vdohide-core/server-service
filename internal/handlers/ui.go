@@ -26,6 +26,7 @@ const logViewerHTML = `<!DOCTYPE html>
     --text:    #e6edf3; --muted:   #8b949e; --accent:  #58a6ff;
     --green:   #3fb950; --yellow:  #d29922; --red:     #f85149;
     --orange:  #f0883e;
+    --purple:  #bc8cff;
   }
   html, body { height: 100%; background: var(--bg); color: var(--text); font-family: 'Inter', sans-serif; font-size: 14px; }
 
@@ -127,6 +128,18 @@ const logViewerHTML = `<!DOCTYPE html>
   .worker-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
   .worker-tag.enabled  { background: rgba(63,185,80,.12); color: var(--green); }
   .worker-tag.disabled { background: rgba(248,81,73,.12); color: var(--red); }
+  .worker-tag.type-download  { background: rgba(88,166,255,.12); color: var(--accent); }
+  .worker-tag.type-transcode { background: rgba(188,140,255,.12); color: var(--purple); }
+
+  /* ── Filter Bar ── */
+  .filter-bar { display: flex; gap: 8px; margin-bottom: 16px; align-items: center; }
+  .btn-filter {
+    padding: 6px 14px; border-radius: 20px; border: 1px solid var(--border);
+    background: transparent; color: var(--muted); font-size: 12px; cursor: pointer;
+    transition: all .15s; font-family: inherit; font-weight: 500;
+  }
+  .btn-filter:hover { background: rgba(255,255,255,.04); color: var(--text); border-color: var(--muted); }
+  .btn-filter.active { background: rgba(88,166,255,.1); color: var(--accent); border-color: var(--accent); }
 
   /* Log modal */
   .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 100; display: none; align-items: center; justify-content: center; }
@@ -187,6 +200,11 @@ const logViewerHTML = `<!DOCTYPE html>
     <div class="htz-header">
       <div class="htz-title">👷 Workers</div>
       <button class="btn" onclick="loadWorkers()">↺ Refresh</button>
+    </div>
+    <div class="filter-bar">
+      <button class="btn-filter active" data-filter="all" onclick="setWorkerFilter('all')">All Workers</button>
+      <button class="btn-filter" data-filter="download" onclick="setWorkerFilter('download')">⬇️ Downloads</button>
+      <button class="btn-filter" data-filter="transcode" onclick="setWorkerFilter('transcode')">⚙️ Transcodes</button>
     </div>
     <div id="worker-stats" class="worker-stats"></div>
     <div id="worker-grid" class="server-grid">
@@ -383,76 +401,121 @@ function pctColor(pct) {
 }
 
 // ── Workers tab ─────────────────────────────────────────────────────────
+let cachedWorkers = [];
+let currentWorkerFilter = 'all';
+
 async function loadWorkers() {
   const grid = document.getElementById('worker-grid');
-  const stats = document.getElementById('worker-stats');
   grid.innerHTML = '<div class="empty-state">Loading...</div>';
-  stats.innerHTML = '';
   try {
     const res = await fetch('/workers');
     const data = await res.json();
-    const workers = data.workers || [];
-    if (!workers.length) {
-      grid.innerHTML = '<div class="empty-state">No workers registered</div>';
-      return;
-    }
-
-    // Stats summary
-    const online = workers.filter(w => w.isOnline).length;
-    const busy = workers.filter(w => w.isOnline && w.status === 'busy').length;
-    const idle = workers.filter(w => w.isOnline && w.status === 'idle').length;
-    const offlineN = workers.filter(w => !w.isOnline).length;
-    stats.innerHTML =
-      '<div class="worker-stat"><div class="worker-stat-label">Total</div><div class="worker-stat-value">' + workers.length + '</div></div>' +
-      '<div class="worker-stat"><div class="worker-stat-label">Online</div><div class="worker-stat-value" style="color:var(--green)">' + online + '</div></div>' +
-      '<div class="worker-stat"><div class="worker-stat-label">Busy</div><div class="worker-stat-value" style="color:var(--yellow)">' + busy + '</div></div>' +
-      '<div class="worker-stat"><div class="worker-stat-label">Idle</div><div class="worker-stat-value" style="color:var(--accent)">' + idle + '</div></div>' +
-      '<div class="worker-stat"><div class="worker-stat-label">Offline</div><div class="worker-stat-value" style="color:var(--red)">' + offlineN + '</div></div>';
-
-    // Worker cards
-    grid.innerHTML = workers.map(w => {
-      const statusCls = w.isOnline ? (w.status === 'busy' ? 'status-initializing' : 'status-running') : 'status-off';
-      const statusLabel = w.isOnline ? w.status : 'offline';
-      const enableTag = w.enable
-        ? '<span class="worker-tag enabled">✓ Enabled</span>'
-        : '<span class="worker-tag disabled">✗ Disabled</span>';
-      const cardCls = 'server-card' + (!w.enable ? ' worker-card-disabled' : '');
-
-      let sysHtml = '';
-      if (w.system) {
-        const s = w.system;
-        const diskPct = s.diskTotal > 0 ? Math.round(s.diskUsed / s.diskTotal * 100) : 0;
-        const memPct = s.memTotal > 0 ? Math.round(s.memUsed / s.memTotal * 100) : 0;
-        sysHtml =
-          '<div style="display:flex;flex-direction:column;gap:6px;margin-top:4px">' +
-            '<div style="font-size:11px;color:var(--muted)">Disk ' + fmtSize(s.diskUsed) + ' / ' + fmtSize(s.diskTotal) + ' (' + diskPct + '%)' +
-              '<div class="progress-bar"><div class="progress-fill ' + pctColor(diskPct) + '" style="width:' + diskPct + '%"></div></div>' +
-            '</div>' +
-            '<div style="font-size:11px;color:var(--muted)">Memory ' + fmtSize(s.memUsed) + ' / ' + fmtSize(s.memTotal) + ' (' + memPct + '%)' +
-              '<div class="progress-bar"><div class="progress-fill ' + pctColor(memPct) + '" style="width:' + memPct + '%"></div></div>' +
-            '</div>' +
-          '</div>';
-      }
-
-      return '<div class="' + cardCls + '">' +
-        '<div class="server-card-head">' +
-          '<div class="server-name">' + escHtml(w.workerId) + '</div>' +
-          '<div class="status-pill ' + statusCls + '">' + statusLabel + '</div>' +
-          enableTag +
-        '</div>' +
-        '<div class="server-meta">' +
-          '<span><span class="label">Host</span><strong>' + escHtml(w.hostname) + '</strong></span>' +
-          '<span><span class="label">IP</span>' + (w.ip || '—') + '</span>' +
-          '<span><span class="label">PID</span>' + w.pid + '</span>' +
-          '<span><span class="label">Jobs</span>' + w.activeJobs + ' / ' + w.maxJobs + '</span>' +
-          '<span><span class="label">Heartbeat</span>' + fmtAgo(w.heartbeatAt) + '</span>' +
-        '</div>' +
-        sysHtml +
-      '</div>';
-    }).join('');
+    cachedWorkers = data.workers || [];
+    renderWorkers();
   } catch(e) {
     grid.innerHTML = '<div class="empty-state" style="color:var(--red)">Failed to load: ' + e.message + '</div>';
   }
+}
+
+function setWorkerFilter(filter) {
+  currentWorkerFilter = filter;
+  document.querySelectorAll('.btn-filter').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-filter') === filter);
+  });
+  renderWorkers();
+}
+
+function renderWorkers() {
+  const grid = document.getElementById('worker-grid');
+  const stats = document.getElementById('worker-stats');
+  
+  if (!cachedWorkers.length) {
+    grid.innerHTML = '<div class="empty-state">No workers registered</div>';
+    stats.innerHTML = '';
+    return;
+  }
+
+  // Calculate stats using ALL workers
+  const online = cachedWorkers.filter(w => w.isOnline).length;
+  const busy = cachedWorkers.filter(w => w.isOnline && w.status === 'busy').length;
+  const idle = cachedWorkers.filter(w => w.isOnline && w.status === 'idle').length;
+  const offlineN = cachedWorkers.filter(w => !w.isOnline).length;
+  
+  const downloadCount = cachedWorkers.filter(w => w.type === 'download' || !w.type).length;
+  const transcodeCount = cachedWorkers.filter(w => w.type === 'transcode').length;
+
+  stats.innerHTML =
+    '<div class="worker-stat"><div class="worker-stat-label">Total</div><div class="worker-stat-value">' + cachedWorkers.length + '</div></div>' +
+    '<div class="worker-stat"><div class="worker-stat-label">Online</div><div class="worker-stat-value" style="color:var(--green)">' + online + '</div></div>' +
+    '<div class="worker-stat"><div class="worker-stat-label">Busy</div><div class="worker-stat-value" style="color:var(--yellow)">' + busy + '</div></div>' +
+    '<div class="worker-stat"><div class="worker-stat-label">Idle</div><div class="worker-stat-value" style="color:var(--accent)">' + idle + '</div></div>' +
+    '<div class="worker-stat"><div class="worker-stat-label">Offline</div><div class="worker-stat-value" style="color:var(--red)">' + offlineN + '</div></div>' +
+    '<div class="worker-stat"><div class="worker-stat-label">Downloads</div><div class="worker-stat-value" style="color:var(--accent)">' + downloadCount + '</div></div>' +
+    '<div class="worker-stat"><div class="worker-stat-label">Transcodes</div><div class="worker-stat-value" style="color:var(--purple)">' + transcodeCount + '</div></div>';
+
+  // Filter workers to display
+  let filtered = cachedWorkers;
+  if (currentWorkerFilter !== 'all') {
+    filtered = cachedWorkers.filter(w => w.type === currentWorkerFilter || (!w.type && currentWorkerFilter === 'download'));
+  }
+
+  if (!filtered.length) {
+    grid.innerHTML = '<div class="empty-state">No workers match the selected filter</div>';
+    return;
+  }
+
+  // Render cards
+  grid.innerHTML = filtered.map(w => {
+    const statusCls = w.isOnline ? (w.status === 'busy' ? 'status-initializing' : 'status-running') : 'status-off';
+    const statusLabel = w.isOnline ? w.status : 'offline';
+    
+    const enableTag = w.enable
+      ? '<span class="worker-tag enabled">✓ Enabled</span>'
+      : '<span class="worker-tag disabled">✗ Disabled</span>';
+      
+    const typeTag = w.type === 'transcode'
+      ? '<span class="worker-tag type-transcode">⚙️ Transcode</span>'
+      : '<span class="worker-tag type-download">⬇️ Download</span>';
+      
+    const cardCls = 'server-card' + (!w.enable ? ' worker-card-disabled' : '');
+
+    let sysHtml = '';
+    if (w.system) {
+      const s = w.system;
+      const diskPct = s.diskTotal > 0 ? Math.round(s.diskUsed / s.diskTotal * 100) : 0;
+      const memPct = s.memTotal > 0 ? Math.round(s.memUsed / s.memTotal * 100) : 0;
+      const cpuPct = typeof s.cpuPercent === 'number' ? Math.round(s.cpuPercent) : 0;
+      sysHtml =
+        '<div style="display:flex;flex-direction:column;gap:6px;margin-top:4px">' +
+          '<div style="font-size:11px;color:var(--muted)">Disk ' + fmtSize(s.diskUsed) + ' / ' + fmtSize(s.diskTotal) + ' (' + diskPct + '%)' +
+            '<div class="progress-bar"><div class="progress-fill ' + pctColor(diskPct) + '" style="width:' + diskPct + '%"></div></div>' +
+          '</div>' +
+          '<div style="font-size:11px;color:var(--muted)">Memory ' + fmtSize(s.memUsed) + ' / ' + fmtSize(s.memTotal) + ' (' + memPct + '%)' +
+            '<div class="progress-bar"><div class="progress-fill ' + pctColor(memPct) + '" style="width:' + memPct + '%"></div></div>' +
+          '</div>' +
+          '<div style="font-size:11px;color:var(--muted)">CPU ' + cpuPct + '%' +
+            '<div class="progress-bar"><div class="progress-fill ' + pctColor(cpuPct) + '" style="width:' + cpuPct + '%"></div></div>' +
+          '</div>' +
+        '</div>';
+    }
+
+    return '<div class="' + cardCls + '">' +
+      '<div class="server-card-head">' +
+        '<div class="server-name">' + escHtml(w.workerId) + '</div>' +
+        '<div class="status-pill ' + statusCls + '">' + statusLabel + '</div>' +
+        typeTag +
+        enableTag +
+      '</div>' +
+      '<div class="server-meta">' +
+        '<span><span class="label">Host</span><strong>' + escHtml(w.hostname) + '</strong></span>' +
+        '<span><span class="label">IP</span>' + (w.ip || '—') + '</span>' +
+        '<span><span class="label">PID</span>' + w.pid + '</span>' +
+        '<span><span class="label">Jobs</span>' + w.activeJobs + ' / ' + w.maxJobs + '</span>' +
+        '<span><span class="label">Heartbeat</span>' + fmtAgo(w.heartbeatAt) + '</span>' +
+      '</div>' +
+      sysHtml +
+    '</div>';
+  }).join('');
 }
 
 connect();

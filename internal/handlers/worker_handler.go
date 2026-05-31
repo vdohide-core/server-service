@@ -27,19 +27,20 @@ func (h *Handler) HandleWorkerList(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now()
 	type workerResp struct {
-		ID          string                  `json:"id"`
-		WorkerID    string                  `json:"workerId"`
-		Hostname    string                  `json:"hostname"`
-		IP          string                  `json:"ip"`
-		PID         int                     `json:"pid"`
-		Enable      bool                    `json:"enable"`
-		Status      string                  `json:"status"`
-		ActiveJobs  int                     `json:"activeJobs"`
-		MaxJobs     int                     `json:"maxJobs"`
+		ID          string                   `json:"id"`
+		WorkerID    string                   `json:"workerId"`
+		Hostname    string                   `json:"hostname"`
+		IP          string                   `json:"ip"`
+		PID         int                      `json:"pid"`
+		Enable      bool                     `json:"enable"`
+		Type        string                   `json:"type"`
+		Status      string                   `json:"status"`
+		ActiveJobs  int                      `json:"activeJobs"`
+		MaxJobs     int                      `json:"maxJobs"`
 		System      *models.WorkerSystemInfo `json:"system,omitempty"`
-		IsOnline    bool                    `json:"isOnline"`
-		HeartbeatAt time.Time               `json:"heartbeatAt"`
-		CreatedAt   time.Time               `json:"createdAt"`
+		IsOnline    bool                     `json:"isOnline"`
+		HeartbeatAt time.Time                `json:"heartbeatAt"`
+		CreatedAt   time.Time                `json:"createdAt"`
 	}
 
 	out := make([]workerResp, 0, len(workers))
@@ -52,6 +53,7 @@ func (h *Handler) HandleWorkerList(w http.ResponseWriter, r *http.Request) {
 			IP:          wr.IP,
 			PID:         wr.PID,
 			Enable:      wr.Enable,
+			Type:        wr.Type,
 			Status:      wr.Status,
 			ActiveJobs:  wr.ActiveJobs,
 			MaxJobs:     wr.MaxJobs,
