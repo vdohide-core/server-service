@@ -80,6 +80,9 @@ func main() {
 		// Start worker cleanup scheduler (mark stale workers offline, delete old ones)
 		go services.StartWorkerCleanupScheduler(ctx)
 
+		// Start original cleanup scheduler (soft-delete original media after full transcode)
+		go services.StartOriginalCleanupScheduler(ctx)
+
 		log.Println("✅ Schedulers enabled (production mode)")
 	} else {
 		log.Println("⚠️  Schedulers DISABLED (SCHEDULERS=false) — HTTP only mode")
@@ -153,6 +156,7 @@ func main() {
 	log.Printf("   ⏱️  File cleanup            - every 1 min (batch=5)")
 	log.Printf("   ⏱️  S3 storage cleanup      - every 1 min")
 	log.Printf("   ⏱️  Worker cleanup          - every 1 min")
+	log.Printf("   ⏱️  Original cleanup        - every 1 min")
 
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("❌ Server error: %v", err)

@@ -27,6 +27,7 @@ Provides a Web UI dashboard for monitoring logs, workers, and Hetzner servers.
 | S3 storage cleanup | Purge orphaned media/ingest objects from S3 |
 | Hetzner auto-scaler | Spin up/down download servers based on pending jobs |
 | Worker cleanup | Mark stale workers offline (3 min), delete old records (1 hour) |
+| Original cleanup | Soft-delete original media after file transcoded to highest resolution |
 
 > All schedulers can be disabled with `SCHEDULERS=false` for dev/test (HTTP-only mode).
 
