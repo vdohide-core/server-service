@@ -130,6 +130,8 @@ const logViewerHTML = `<!DOCTYPE html>
   .worker-tag.disabled { background: rgba(248,81,73,.12); color: var(--red); }
   .worker-tag.type-download  { background: rgba(88,166,255,.12); color: var(--accent); }
   .worker-tag.type-transcode { background: rgba(188,140,255,.12); color: var(--purple); }
+  .worker-tag.type-transfer  { background: rgba(240,136,62,.12); color: var(--orange); }
+  .worker-tag.type-spritesheet { background: rgba(57,197,207,.12); color: #39c5cf; }
 
   /* ── Filter Bar ── */
   .filter-bar { display: flex; gap: 8px; margin-bottom: 16px; align-items: center; }
@@ -205,6 +207,8 @@ const logViewerHTML = `<!DOCTYPE html>
       <button class="btn-filter active" data-filter="all" onclick="setWorkerFilter('all')">All Workers</button>
       <button class="btn-filter" data-filter="download" onclick="setWorkerFilter('download')">⬇️ Downloads</button>
       <button class="btn-filter" data-filter="transcode" onclick="setWorkerFilter('transcode')">⚙️ Transcodes</button>
+      <button class="btn-filter" data-filter="transfer" onclick="setWorkerFilter('transfer')">🔁 Transfers</button>
+      <button class="btn-filter" data-filter="spritesheet" onclick="setWorkerFilter('spritesheet')">🖼️ Spritesheets</button>
     </div>
     <div id="worker-stats" class="worker-stats"></div>
     <div id="worker-grid" class="server-grid">
@@ -443,6 +447,8 @@ function renderWorkers() {
   
   const downloadCount = cachedWorkers.filter(w => w.type === 'download' || !w.type).length;
   const transcodeCount = cachedWorkers.filter(w => w.type === 'transcode').length;
+  const transferCount = cachedWorkers.filter(w => w.type === 'transfer').length;
+  const spritesheetCount = cachedWorkers.filter(w => w.type === 'spritesheet').length;
 
   stats.innerHTML =
     '<div class="worker-stat"><div class="worker-stat-label">Total</div><div class="worker-stat-value">' + cachedWorkers.length + '</div></div>' +
@@ -451,7 +457,9 @@ function renderWorkers() {
     '<div class="worker-stat"><div class="worker-stat-label">Idle</div><div class="worker-stat-value" style="color:var(--accent)">' + idle + '</div></div>' +
     '<div class="worker-stat"><div class="worker-stat-label">Offline</div><div class="worker-stat-value" style="color:var(--red)">' + offlineN + '</div></div>' +
     '<div class="worker-stat"><div class="worker-stat-label">Downloads</div><div class="worker-stat-value" style="color:var(--accent)">' + downloadCount + '</div></div>' +
-    '<div class="worker-stat"><div class="worker-stat-label">Transcodes</div><div class="worker-stat-value" style="color:var(--purple)">' + transcodeCount + '</div></div>';
+    '<div class="worker-stat"><div class="worker-stat-label">Transcodes</div><div class="worker-stat-value" style="color:var(--purple)">' + transcodeCount + '</div></div>' +
+    '<div class="worker-stat"><div class="worker-stat-label">Transfers</div><div class="worker-stat-value" style="color:var(--orange)">' + transferCount + '</div></div>' +
+    '<div class="worker-stat"><div class="worker-stat-label">Spritesheets</div><div class="worker-stat-value" style="color:#39c5cf">' + spritesheetCount + '</div></div>';
 
   // Filter workers to display
   let filtered = cachedWorkers;
@@ -475,7 +483,11 @@ function renderWorkers() {
       
     const typeTag = w.type === 'transcode'
       ? '<span class="worker-tag type-transcode">⚙️ Transcode</span>'
-      : '<span class="worker-tag type-download">⬇️ Download</span>';
+      : (w.type === 'transfer'
+        ? '<span class="worker-tag type-transfer">🔁 Transfer</span>'
+        : (w.type === 'spritesheet'
+          ? '<span class="worker-tag type-spritesheet">🖼️ Spritesheet</span>'
+          : '<span class="worker-tag type-download">⬇️ Download</span>'));
       
     const cardCls = 'server-card' + (!w.enable ? ' worker-card-disabled' : '');
 

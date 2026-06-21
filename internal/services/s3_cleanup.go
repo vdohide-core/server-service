@@ -26,15 +26,21 @@ type s3Record struct {
 	Path      *string `bson:"path"`
 }
 
-// SyncS3Cleanup finds soft-deleted files (metadata.deletedAt exists),
-// then deletes their associated media and ingest objects from S3,
-// followed by removing those DB records.
-// This runs separately from file_cleanup.go (which deletes the File documents themselves).
+// SyncS3Cleanup purges S3 objects for soft-deleted media/ingest records.
+// Media: only when parent file is soft-deleted (metadata.deletedAt).
+// Ingest: any record with deletedAt (e.g. upload ingest after server-download).
 func SyncS3Cleanup() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	// ── 1. Find IDs of all soft-deleted files ─────────────────────────
+	storageMap, err := loadS3StorageMap(ctx)
+	if err != nil {
+		return fmt.Errorf("load storages: %w", err)
+	}
+
+	var mDel, iDel int64
+
+	// ── 1. Soft-deleted files → purge their soft-deleted medias ───────
 	cur, err := models.FileModel.Col().Find(ctx,
 		bson.M{"metadata.deletedAt": bson.M{"$exists": true}},
 		options.Find().SetProjection(bson.M{"_id": 1}),
@@ -52,31 +58,26 @@ func SyncS3Cleanup() error {
 	}
 	cur.Close(ctx)
 
-	if len(fileDocs) == 0 {
-		return nil
+	if len(fileDocs) > 0 {
+		fileIDs := make([]string, len(fileDocs))
+		for i, f := range fileDocs {
+			fileIDs[i] = f.ID
+		}
+		log.Printf("🪣  S3 cleanup: %d deleted file(s), %d S3 storage(s) found", len(fileIDs), len(storageMap))
+
+		mDel, err = purgeS3Records(ctx, models.MediaModel.Col(), bson.M{
+			"fileId":    bson.M{"$in": fileIDs},
+			"deletedAt": bson.M{"$exists": true},
+		}, storageMap, "media")
+		if err != nil {
+			log.Printf("  ⚠️ media S3 purge error: %v", err)
+		}
 	}
 
-	fileIDs := make([]string, len(fileDocs))
-	for i, f := range fileDocs {
-		fileIDs[i] = f.ID
-	}
-
-	// ── 2. Load all S3 storages (cached per run) ──────────────────────
-	storageMap, err := loadS3StorageMap(ctx)
-	if err != nil {
-		return fmt.Errorf("load storages: %w", err)
-	}
-
-	log.Printf("🪣  S3 cleanup: %d deleted file(s), %d S3 storage(s) found", len(fileIDs), len(storageMap))
-
-	// ── 3. Purge medias ───────────────────────────────────────────────
-	mDel, err := purgeS3Collection(ctx, models.MediaModel.Col(), fileIDs, storageMap, "media")
-	if err != nil {
-		log.Printf("  ⚠️ media S3 purge error: %v", err)
-	}
-
-	// ── 4. Purge ingests ──────────────────────────────────────────────
-	iDel, err := purgeS3Collection(ctx, models.IngestModel.Col(), fileIDs, storageMap, "ingest")
+	// ── 2. All soft-deleted ingests (upload cleanup, file may still be active) ──
+	iDel, err = purgeS3Records(ctx, models.IngestModel.Col(), bson.M{
+		"deletedAt": bson.M{"$exists": true},
+	}, storageMap, "ingest")
 	if err != nil {
 		log.Printf("  ⚠️ ingest S3 purge error: %v", err)
 	}
@@ -88,21 +89,15 @@ func SyncS3Cleanup() error {
 	return nil
 }
 
-// purgeS3Collection fetches records from col where fileId is in fileIDs,
-// deletes S3 objects, then bulk-deletes the DB records.
-// Returns number of DB records deleted.
-func purgeS3Collection(
+// purgeS3Records fetches records matching filter, deletes S3 objects, then hard-deletes DB rows.
+func purgeS3Records(
 	ctx context.Context,
 	col *mongo.Collection,
-	fileIDs []string,
+	filter bson.M,
 	storageMap map[string]*models.Storage,
 	label string,
 ) (int64, error) {
-	cur, err := col.Find(ctx,
-		bson.M{
-			"fileId":    bson.M{"$in": fileIDs},
-			"deletedAt": bson.M{"$exists": true}, // เฉพาะที่ถูก mark ลบแล้วเท่านั้น
-		},
+	cur, err := col.Find(ctx, filter,
 		options.Find().SetProjection(bson.M{"_id": 1, "storageId": 1, "path": 1}),
 	)
 	if err != nil {

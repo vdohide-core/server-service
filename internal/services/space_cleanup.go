@@ -152,7 +152,6 @@ func hardDeleteEmptyWorkspaces(ctx context.Context) {
 	domains, _ := models.CustomDomainModel.DeleteMany(ctx, spaceFilter)
 	oauths, _ := models.OAuthModel.DeleteMany(ctx, spaceFilter)
 	apiKeys, _ := models.ApiKeyModel.DeleteMany(ctx, spaceFilter)
-	ads, _ := models.AdsModel.DeleteMany(ctx, spaceFilter)
 
 	// ลบ workspace เอง
 	wsRes, _ := models.WorkspaceModel.DeleteMany(ctx, bson.M{"_id": bson.M{"$in": wsIDs}})
@@ -161,9 +160,9 @@ func hardDeleteEmptyWorkspaces(ctx context.Context) {
 		wsDeleted = wsRes.DeletedCount
 	}
 
-	log.Printf("  ✅ %d workspace(s) hard deleted — members=%d domains=%d oauths=%d apiKeys=%d ads=%d",
+	log.Printf("  ✅ %d workspace(s) hard deleted — members=%d domains=%d oauths=%d apiKeys=%d",
 		wsDeleted, members.DeletedCount, domains.DeletedCount,
-		oauths.DeletedCount, apiKeys.DeletedCount, ads.DeletedCount,
+		oauths.DeletedCount, apiKeys.DeletedCount,
 	)
 }
 

@@ -15,8 +15,10 @@ const (
 
 // Worker types
 const (
-	WorkerTypeDownload  = "download"
-	WorkerTypeTranscode = "transcode"
+	WorkerTypeDownload    = "download"
+	WorkerTypeTranscode   = "transcode"
+	WorkerTypeTransfer    = "transfer"
+	WorkerTypeSpritesheet = "spritesheet"
 )
 
 
@@ -39,7 +41,7 @@ type Worker struct {
 	IP          string            `bson:"ip" json:"ip"`
 	PID         int               `bson:"pid" json:"pid"`
 	Enable      bool              `bson:"enable" json:"enable"`                 // false = stop accepting jobs
-	Type        string            `bson:"type,omitempty" json:"type,omitempty"` // download, transcode
+	Type        string            `bson:"type,omitempty" json:"type,omitempty"` // download, transcode, transfer, spritesheet
 	Status      string            `bson:"status" json:"status"`                 // idle, busy, offline
 	ActiveJobs  int               `bson:"activeJobs" json:"activeJobs"`
 	MaxJobs     int               `bson:"maxJobs" json:"maxJobs"`

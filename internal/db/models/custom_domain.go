@@ -8,6 +8,7 @@ import (
 
 // PlayerConfig holds video player configuration for a custom domain.
 type PlayerConfig struct {
+	Skin            *string `bson:"skin,omitempty" json:"skin,omitempty"`
 	LogoImageURL    *string `bson:"logoImageUrl,omitempty" json:"logoImageUrl,omitempty"`
 	LogoWebsiteURL  *string `bson:"logoWebsiteUrl,omitempty" json:"logoWebsiteUrl,omitempty"`
 	LogoPosition    *string `bson:"logoPosition,omitempty" json:"logoPosition,omitempty"`
@@ -31,24 +32,30 @@ type PlayerConfig struct {
 	SeekStep        int     `bson:"seekStep" json:"seekStep"`
 }
 
-// Advert holds a video advertisement config.
-type Advert struct {
-	ID          *string `bson:"id,omitempty" json:"id,omitempty"`
-	Name        *string `bson:"name,omitempty" json:"name,omitempty"`
-	MP4URL      *string `bson:"mp4Url,omitempty" json:"mp4Url,omitempty"`
-	WebsiteURL  *string `bson:"websiteUrl,omitempty" json:"websiteUrl,omitempty"`
-	SkipSeconds int     `bson:"skipSeconds" json:"skipSeconds"`
-	IsActive    *bool   `bson:"isActive,omitempty" json:"isActive,omitempty"`
+// AdsContent is an embedded advert item stored on the domain.
+type AdsContent struct {
+	ID          string   `bson:"_id" json:"id"`
+	Enabled     bool     `bson:"enabled" json:"enabled"`
+	Name        string   `bson:"name" json:"name"`
+	Mp4URL      *string  `bson:"mp4Url,omitempty" json:"mp4Url,omitempty"`
+	SkipSeconds *int     `bson:"skipSeconds,omitempty" json:"skipSeconds,omitempty"`
+	ImageURL    *string  `bson:"imageUrl,omitempty" json:"imageUrl,omitempty"`
+	ShowOn      []string `bson:"showOn,omitempty" json:"showOn,omitempty"`
+	WebsiteURL  *string  `bson:"websiteUrl,omitempty" json:"websiteUrl,omitempty"`
+	Script      *string  `bson:"script,omitempty" json:"script,omitempty"`
 }
 
-// AdvertImage holds an image advertisement config.
-type AdvertImage struct {
-	ID         *string  `bson:"id,omitempty" json:"id,omitempty"`
-	Name       *string  `bson:"name,omitempty" json:"name,omitempty"`
-	ImageURL   *string  `bson:"imageUrl,omitempty" json:"imageUrl,omitempty"`
-	WebsiteURL *string  `bson:"websiteUrl,omitempty" json:"websiteUrl,omitempty"`
-	IsActive   *bool    `bson:"isActive,omitempty" json:"isActive,omitempty"`
-	ShowOn     []string `bson:"showOn,omitempty" json:"showOn,omitempty"` // ready, end, pause
+// DomainAdvertCategory groups adverts by type with an enable switch.
+type DomainAdvertCategory struct {
+	Enabled bool         `bson:"enabled" json:"enabled"`
+	List    []AdsContent `bson:"list" json:"list"`
+}
+
+// DomainAdverts holds embedded video, image, and script adverts on a domain.
+type DomainAdverts struct {
+	Video  DomainAdvertCategory `bson:"video" json:"video"`
+	Image  DomainAdvertCategory `bson:"image" json:"image"`
+	Script DomainAdvertCategory `bson:"script" json:"script"`
 }
 
 // DomainDNS holds DNS configuration for domain verification.
@@ -64,25 +71,25 @@ type DomainDNS struct {
 
 // CustomDomain represents a custom domain with player/ad config.
 // Collection: "custom_domains" | _id: String (UUID)
-//
-// TS changes (updated):
-//   - Removed ownerId → replaced by creatorId + spaceId
-//   - Added spaceId: ref File (for space-scoped domains)
-//   - Added creatorId: ref User
 type CustomDomain struct {
-	ID               string        `bson:"_id" json:"id" goose:"required,default:uuid"`
-	Enable           bool          `bson:"enable" json:"enable"`
-	Name             string        `bson:"name" json:"name" goose:"required,unique"`
-	Status           string        `bson:"status" json:"status" goose:"default:pending"` // pending, active, failed, expired
-	CreatorID        *string       `bson:"creatorId,omitempty" json:"creatorId,omitempty" goose:"ref:user,index"`
-	SpaceID          *string       `bson:"spaceId,omitempty" json:"spaceId,omitempty" goose:"ref:workspaces,index"`
-	DNS              *DomainDNS    `bson:"dns,omitempty" json:"dns,omitempty"`
-	Player           *PlayerConfig `bson:"player,omitempty" json:"player,omitempty"`
-	Advert           []Advert      `bson:"advert,omitempty" json:"advert,omitempty"`
-	AdvertImage      *AdvertImage  `bson:"advertImage,omitempty" json:"advertImage,omitempty"`
-	AdvertJavascript *string       `bson:"advertJavascript,omitempty" json:"advertJavascript,omitempty"`
-	CreatedAt        time.Time     `bson:"createdAt" json:"createdAt" goose:"default:now"`
-	UpdatedAt        time.Time     `bson:"updatedAt" json:"updatedAt" goose:"default:now"`
+	ID        string         `bson:"_id" json:"id" goose:"required,default:uuid"`
+	Enable    bool           `bson:"enable" json:"enable"`
+	Name      string         `bson:"name" json:"name" goose:"required,unique"`
+	Status    string         `bson:"status" json:"status" goose:"default:pending"` // pending, active, failed, expired
+	CreatorID *string        `bson:"creatorId,omitempty" json:"creatorId,omitempty" goose:"ref:user,index"`
+	SpaceID   *string        `bson:"spaceId,omitempty" json:"spaceId,omitempty" goose:"ref:workspaces,index"`
+	Slug      string         `bson:"slug" json:"slug" goose:"unique,default:random(11),index"`
+	DNS       *DomainDNS     `bson:"dns,omitempty" json:"dns,omitempty"`
+	Player    *PlayerConfig  `bson:"player,omitempty" json:"player,omitempty"`
+	Adverts   *DomainAdverts `bson:"adverts,omitempty" json:"adverts,omitempty"`
+	CreatedAt time.Time      `bson:"createdAt" json:"createdAt" goose:"default:now"`
+	UpdatedAt time.Time      `bson:"updatedAt" json:"updatedAt" goose:"default:now"`
+}
+
+// DomainVastEntry is the minimal domain data synced for VAST serving.
+type DomainVastEntry struct {
+	Slug    string         `bson:"slug" json:"slug"`
+	Adverts *DomainAdverts `bson:"adverts,omitempty" json:"adverts,omitempty"`
 }
 
 // CustomDomainModel is the goose model for the "custom_domains" collection.
